@@ -1,0 +1,31 @@
+# Build output
+/bin/
+*.exe
+
+# Agent workspace (sandbox root)
+.agent-workspace/
+
+# Harness output
+harness-out/
+
+# Go
+*.test
+*.out
+
+# Secrets (API keys must go through env vars, never committed)
+.env
+.env.local
+
+# 内部开发文档（不进公开仓库，本地保留）
+INTRO.md
+INTERVIEW.md
+REVIEW.md
+USAGE.md
+plan.md
+CLAUDE.md
+
+# 本地临时测试项目（嵌套 git 仓库）
+mytest-go/
+
+# Claude Code 本地配置
+.claude/

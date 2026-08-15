@@ -1,0 +1,194 @@
+package codeindex
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+)
+
+// Retriever combines the precise index and the call graph to assemble
+// task-relevant context. It is deliberately symbol-only: no embeddings, no
+// external services — deterministic and cheap, matching how Claude Code
+// gathers context via search and reading rather than vector retrieval.
+type Retriever struct {
+	ix   *Index
+	root string
+}
+
+// NewRetriever builds a retriever over an index.
+func NewRetriever(ix *Index, root string) *Retriever {
+	return &Retriever{ix: ix, root: root}
+}
+
+// Result is one retrieved context unit.
+type Result struct {
+	Symbol *Symbol
+	Rank   int
+	Reason string // "exact" | "graph"
+}
+
+// Retrieve assembles context for a query: exact symbols first, then their
+// call-graph neighbors. Duplicates are dropped and results capped.
+func (r *Retriever) Retrieve(ctx context.Context, query string, maxResults int) []Result {
+	var out []Result
+	seen := map[string]bool{}
+	add := func(s *Symbol, reason string, rank int) {
+		if s == nil || seen[s.ID()] {
+			return
+		}
+		seen[s.ID()] = true
+		out = append(out, Result{Symbol: s, Reason: reason, Rank: rank})
+	}
+
+	// 1. Precise layer: name/token match.
+	for _, s := range r.precise(query) {
+		add(s, "exact", 0)
+	}
+	// 2. Graph layer: expand callees/callers of everything already included.
+	for _, res := range out {
+		for _, id := range r.ix.Callers(res.Symbol.ID()) {
+			if s := r.ix.symbolByID(id); s != nil {
+				add(s, "graph", 1)
+			}
+		}
+		for _, id := range r.ix.Callers(res.Symbol.ID()) {
+			if s := r.ix.symbolByID(id); s != nil {
+				add(s, "graph", 2)
+			}
+		}
+	}
+
+	if maxResults > 0 && len(out) > maxResults {
+		out = out[:maxResults]
+	}
+	return out
+}
+
+// precise returns symbols whose name contains a query token (whole-word,
+// case-insensitive).
+func (r *Retriever) precise(query string) []*Symbol {
+	var out []*Symbol
+	seen := map[string]bool{}
+	for _, tok := range tokenize(query) {
+		for _, s := range r.ix.ByName(tok) {
+			if !seen[s.ID()] {
+				seen[s.ID()] = true
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// symbolByID looks up a symbol by its ID in the index.
+func (ix *Index) symbolByID(id string) *Symbol {
+	for _, s := range ix.all {
+		if s.ID() == id {
+			return s
+		}
+	}
+	return nil
+}
+
+// Render produces the final prompt text for the retrieved symbols: each
+// symbol's definition + signature + neighbors, capped by budget tokens.
+func (r *Retriever) Render(ctx context.Context, query string, maxResults, tokenBudget int) string {
+	results := r.Retrieve(ctx, query, maxResults)
+	var b strings.Builder
+	used := 0
+	for _, res := range results {
+		chunk := r.renderOne(res)
+		t := estimateTokens(chunk)
+		if used+t > tokenBudget {
+			if used == 0 {
+				b.WriteString(chunk)
+			}
+			break
+		}
+		b.WriteString(chunk)
+		used += t
+	}
+	return b.String()
+}
+
+// renderOne formats a single symbol with its source snippet and neighbors.
+func (r *Retriever) renderOne(res Result) string {
+	s := res.Symbol
+	var b strings.Builder
+	fmt.Fprintf(&b, "── %s (%s) [%s]\n", s.ID(), s.Kind, res.Reason)
+	if s.Signature != "" {
+		fmt.Fprintf(&b, "   sig: %s\n", s.Signature)
+	}
+	if s.Doc != "" {
+		fmt.Fprintf(&b, "   doc: %s\n", firstLine(s.Doc))
+	}
+	if code := r.snippet(s); code != "" {
+		b.WriteString(code)
+	}
+	for _, id := range r.ix.Callees(s.ID()) {
+		fmt.Fprintf(&b, "   calls: %s\n", id)
+	}
+	for _, id := range r.ix.Callers(s.ID()) {
+		fmt.Fprintf(&b, "   called_by: %s\n", id)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// snippet returns the source lines of a symbol (bounded) from disk.
+func (r *Retriever) snippet(s *Symbol) string {
+	if s.File == "" {
+		return ""
+	}
+	data, err := os.ReadFile(r.joinRoot(s.File))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	start := s.Pos.Line - 1
+	end := s.End.Line
+	if end <= start {
+		end = start + 1
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end-start > 20 {
+		end = start + 20
+	}
+	return "   " + strings.Join(lines[start:end], "\n   ") + "\n"
+}
+
+func (r *Retriever) joinRoot(p string) string {
+	if r.root == "" {
+		return p
+	}
+	if strings.HasPrefix(p, r.root) {
+		return p
+	}
+	return r.root + string(os.PathSeparator) + p
+}
+
+// tokenize splits a query into lowercase alphanumeric tokens.
+func tokenize(q string) []string {
+	q = strings.ToLower(q)
+	var out []string
+	for _, f := range strings.FieldsFunc(q, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
+	}) {
+		if len(f) > 1 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// estimateTokens approximates tokens as len/4 (English-ish heuristic; good
+// enough for budget trimming).
+func estimateTokens(s string) int {
+	return len(s) / 4
+}

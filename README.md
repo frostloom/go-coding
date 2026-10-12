@@ -1,5 +1,7 @@
 # go-coding — Go 代码智能体（Coding Agent）
 
+> ⛔ **项目已封版（2026-10-12）** —— 这是一个**面试作品**，功能开发到此为止，不再新增特性或维护；仓库保留可运行、可复现的最终状态。封版说明见文末 [项目状态](#项目状态)。
+
 > 对标 Claude Code 的 **Go 代码智能体 CLI**。纯 Go 从零实现（零 AI SDK 依赖）。
 > **借鉴 Claude Code 证明有效的通用范式，核心价值全部自研** —— 符号级理解、编辑时符号校验、量化评测闭环，这三件是 Claude Code 没有的。
 
@@ -132,6 +134,22 @@ go run ./cmd/replay            # 演示时间线
 > 12 个用例：7 bugfix（`fix_add` 加法 / `fix_div` 求平均 / `fix_reverse` 反转 / **`fix_multi` 跨文件调用链** / **`fix_offbyone` 循环边界少算** / **`fix_errcheck` 吞错误** / **`fix_legacy_time` 废弃时间格式迁移**）+ 4 实现（`impl_concurrency` 并发安全 / `impl_parse` 解析器 / **`impl_lru` LRU 缓存** / **`impl_orderedset` 有序集合**）+ **1 自举（`self_codeindex`：修本项目自己的符号引擎，4 个真实源码文件 ~500 行 + 一个真实 bug）**，每个带**隐藏验收测试**（Agent 运行时看不到，防「自写测试测自己」）。
 >
 > **本地模型**：`OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_MODEL=qwen2.5:7b` 即可让 Agent 跑本地开源模型（Ollama 的 OpenAI 兼容端点），无需改代码。
+
+## 项目状态
+
+**已封版（2026-10-12），不再维护。**
+
+这是面试作品，目标不是「功能面面俱到」，而是把一套 Claude Code 式的通用框架做到讲得透，再把三点**自研差异化**做扎实、量得出：
+
+- **符号级上下文引擎** —— 符号索引 + 调用图 + 两级检索，**零向量依赖**（Claude Code 只有 grep + 读文件，没有符号表）
+- **编辑时符号校验** —— 语法 → gofmt → 调用图回归，删了还被跨文件调用的符号在落盘前被拦下（Claude Code 没有调用图，只能等编译器/测试报错）
+- **Harness 量化评测闭环** —— mock/live 双模式 + 隐藏验收测试 + token 成本，把「Agent 能力」变成可回归的指标
+
+框架层能力（交互 REPL、edit、run-test、会话记忆、hooks、subagent、skill、MCP server/client）已对齐 Claude Code，**到此为止不再加深**；符号层的已知边界（外部类型方法、接口分派、类型不确定的调用退名字近似）与多语言增强（每语言符号适配器）**接受现状**。
+
+**封版时的状态**：`go test ./...` **237 个测试全绿**；mock 门禁 **12/12** `rate=100% avgRounds=1.0`；live 基线已记录（无外部工具 11/12、带 `-mcp` 12/12）。上表「评测基线」即为最终实测数字。
+
+代码仍可正常构建与运行 —— 「快速开始」里的命令全部可用。
 
 ## 许可
 
